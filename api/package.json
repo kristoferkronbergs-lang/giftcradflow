@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.94.0",
