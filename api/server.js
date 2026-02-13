@@ -8,8 +8,7 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.RENDER_SERVICE_PORT || 3001;
-const RENDER_TOKEN = process.env.RENDER_TOKEN || 'render-secret-token-2024';
+const PORT = process.env.PORT || 3001;
 const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -27,7 +26,6 @@ console.log('🚀 Gift Card Render Service Configuration');
 console.log('========================================');
 console.log(`PORT: ${PORT}`);
 console.log(`APP_BASE_URL: ${APP_BASE_URL}`);
-console.log(`RENDER_TOKEN: ${RENDER_TOKEN ? '✅ SET' : '❌ NOT SET'}`);
 console.log(`SUPABASE_URL: ${SUPABASE_URL ? '✅ SET' : '❌ NOT SET'}`);
 console.log(`SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_KEY ? '✅ SET' : '❌ NOT SET'}`);
 console.log('========================================\n');
@@ -67,13 +65,6 @@ app.get('/health', (req, res) => {
 
 app.get('/api/render-data/:orderId', async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.replace('Bearer ', '');
-
-    if (token !== RENDER_TOKEN) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
     const { orderId } = req.params;
 
     // 1) order (NEKĀDU gift_cards tabulu)
@@ -146,14 +137,6 @@ app.post('/api/render-giftcard', async (req, res) => {
   let page = null;
 
   try {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.replace('Bearer ', '');
-
-    if (token !== RENDER_TOKEN) {
-      console.error('[Render] ❌ Unauthorized access attempt');
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-
     const { order_id, request_id, render_url } = req.body;
     const reqId = request_id || 'unknown';
 
@@ -172,7 +155,7 @@ app.post('/api/render-giftcard', async (req, res) => {
     const renderUrl =
       (typeof render_url === 'string' && render_url.length > 0)
         ? render_url
-        : `${APP_BASE_URL}/render/giftcard/${order_id}?token=${RENDER_TOKEN}`;
+        : `${APP_BASE_URL}/render/giftcard/${order_id}`;
 
     console.log(`[Render:${reqId}] 📄 Final render URL:`, renderUrl);
 
@@ -359,3 +342,4 @@ app.listen(PORT, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Render endpoint: POST http://localhost:${PORT}/api/render-giftcard`);
 });
+
