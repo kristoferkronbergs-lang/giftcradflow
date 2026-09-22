@@ -9,7 +9,10 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3001;
-const APP_BASE_URL = process.env.APP_BASE_URL || 'http://localhost:5173';
+// Hardcoded: the render target must always be the production site, regardless
+// of any APP_BASE_URL env var (Render dashboard) or render_url override sent
+// by a caller (e.g. a stale value from the Supabase trigger-make-email secret).
+const APP_BASE_URL = 'https://giftcardlayers.com';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -137,7 +140,7 @@ app.post('/api/render-giftcard', async (req, res) => {
   let page = null;
 
   try {
-    const { order_id, request_id, render_url } = req.body;
+    const { order_id, request_id } = req.body;
     const reqId = request_id || 'unknown';
 
     if (!order_id) {
@@ -152,10 +155,10 @@ app.post('/api/render-giftcard', async (req, res) => {
       hasServiceKey: !!SUPABASE_SERVICE_KEY,
     });
 
-    const renderUrl =
-      (typeof render_url === 'string' && render_url.length > 0)
-        ? render_url
-        : `${APP_BASE_URL}/render/giftcard/${order_id}`;
+    // Always render from the production site — ignore any render_url a
+    // caller might send, so a stale value elsewhere can never point this
+    // at the wrong domain again.
+    const renderUrl = `${APP_BASE_URL}/render/giftcard/${order_id}`;
 
     console.log(`[Render:${reqId}] 📄 Final render URL:`, renderUrl);
 
@@ -342,4 +345,3 @@ app.listen(PORT, () => {
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Render endpoint: POST http://localhost:${PORT}/api/render-giftcard`);
 });
-
