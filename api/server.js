@@ -340,8 +340,130 @@ app.post('/api/render-giftcard', async (req, res) => {
   }
 });
 
+// ============================================================
+// Printable gift card document (PDF)
+//
+// POST /api/render-document
+// Body: { order_id, request_id?, payload: { data, branding, settings } }
+// Returns: the PDF bytes (Content-Type: application/pdf)
+//
+// The payload is built by the trigger-make-email edge function and injected into
+// /render/document/:orderId as window.__GIFTCARD_DOCUMENT__ before the page loads,
+// so the render page never fetches order data (no endpoint exposes redeem codes).
+// This endpoint does not touch storage — the edge function uploads the result.
+//
+// Optional: set RENDER_DOCUMENT_TOKEN here and in the Supabase secrets to require
+// "Authorization: Bearer <token>". Unset = open, like /api/render-giftcard.
+// ============================================================
+const RENDER_DOCUMENT_TOKEN = process.env.RENDER_DOCUMENT_TOKEN || '';
+
+app.post('/api/render-document', async (req, res) => {
+  const startTime = Date.now();
+  const { order_id, request_id, payload } = req.body || {};
+  const reqId = request_id || 'unknown';
+  let context = null;
+
+  try {
+    if (RENDER_DOCUMENT_TOKEN && req.headers.authorization !== `Bearer ${RENDER_DOCUMENT_TOKEN}`) {
+      console.warn(`[Document:${reqId}] ⛔ Unauthorized request`);
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    if (!order_id) {
+      return res.status(400).json({ error: 'order_id is required' });
+    }
+    if (!payload || !payload.data || !payload.data.code || !payload.settings) {
+      return res.status(400).json({ error: 'payload with data.code and settings is required' });
+    }
+
+    const renderUrl = `${APP_BASE_URL}/render/document/${encodeURIComponent(order_id)}`;
+    console.log(`[Document:${reqId}] 📄 Rendering PDF for order ${order_id}: ${renderUrl}`);
+
+    const browserInstance = await initBrowser();
+    // A4 at 96dpi — matches the layout the page is designed for
+    context = await browserInstance.newContext({ viewport: { width: 794, height: 1123 } });
+    const page = await context.newPage();
+
+    page.on('pageerror', (error) => console.error(`[Document:${reqId}] 🔴 Page error:`, error.toString()));
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') console.error(`[Document:${reqId}] 🔴 Console error:`, msg.text());
+    });
+    page.on('requestfailed', (request) =>
+      console.error(`[Document:${reqId}] 🔴 Request failed:`, request.url(), request.failure()?.errorText)
+    );
+
+    await page.addInitScript((p) => {
+      window.__GIFTCARD_DOCUMENT__ = p;
+    }, payload);
+
+    const response = await page.goto(renderUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    if (!response) throw new Error('Page navigation failed: no response');
+    if (response.status() !== 200) throw new Error(`Page returned HTTP ${response.status()}`);
+
+    // The page flips this once fonts + all images (re-encoded as JPEG) have settled
+    try {
+      await page.waitForSelector('[data-document-ready="true"]', { timeout: 25000 });
+    } catch {
+      const pageError = await page
+        .locator('[data-testid="giftcard-document-error"]')
+        .textContent({ timeout: 500 })
+        .catch(() => null);
+      const bodyText = await page.evaluate(() => document.body.innerText.slice(0, 300)).catch(() => '');
+      throw new Error(
+        `Selector [data-document-ready="true"] not found after 25s` +
+          (pageError ? ` (page says: ${pageError.trim()})` : ` (body: ${bodyText})`)
+      );
+    }
+
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      preferCSSPageSize: true,
+    });
+
+    await context.close();
+    context = null;
+
+    const duration = Date.now() - startTime;
+    console.log(`[Document:${reqId}] ✅ PDF ready: ${(pdf.length / 1024).toFixed(0)} KB in ${duration}ms`);
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Length': String(pdf.length),
+      'X-Render-Time-Ms': String(duration),
+    });
+    return res.send(pdf);
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[Document:${reqId}] ❌ FAILED after ${duration}ms:`, error.message);
+
+    if (context) {
+      try {
+        await context.close();
+      } catch (e) {
+        console.error(`[Document:${reqId}] Failed to close context:`, e.message);
+      }
+    }
+
+    let step = 'unknown';
+    if (error.message?.includes('data-document-ready')) step = 'document_ready_wait';
+    else if (error.message?.includes('Page returned HTTP')) step = 'page_load';
+    else if (error.message?.includes('navigation')) step = 'page_navigation';
+    else if (error.message?.includes('Browser')) step = 'browser_init';
+
+    return res.status(500).json({
+      error: error.message || 'Document render failed',
+      step,
+      order_id,
+      request_id: reqId,
+      render_time_ms: duration,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Gift card render service running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
   console.log(`Render endpoint: POST http://localhost:${PORT}/api/render-giftcard`);
+  console.log(`Document endpoint: POST http://localhost:${PORT}/api/render-document`);
 });
